@@ -25,11 +25,7 @@ create table if not exists knowledge (
   chunk_index int
 );
 
--- Index for fast approximate nearest-neighbor search
-create index if not exists knowledge_embedding_idx
-  on knowledge
-  using ivfflat (embedding vector_cosine_ops)
-  with (lists = 100);
+
 
 -- Similarity search function
 create or replace function match_knowledge(
