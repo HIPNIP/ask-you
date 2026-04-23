@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASK YOU // COGNITIVE ARCHIVE</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Orbitron:wght@400;700;900&family=Crimson+Pro:ital,wght@0,400;0,600;1,400;1,600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+<style>
+:root {
+  --bg: #0A0A0A; --surf: #141417; --surf2: #1e1e22;
+  --orange: #FF6A00; --yellow: #F5D000; --green: #00FF7F;
+  --red: #CC0000; --text: #E8E5DC; --dim: #504D47; --dim2: #3a3835;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+
+body::before {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.045) 3px, rgba(0,0,0,0.045) 4px);
+}
+
+::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-track { background: var(--bg); } ::-webkit-scrollbar-thumb { background: var(--dim2); }
+
+input, textarea, button { font-family: 'IBM Plex Mono', monospace; }
+input, textarea { background: transparent; border: none; outline: none; color: var(--text); font-size: 12px; }
+input::placeholder, textarea::placeholder { color: var(--dim); }
+textarea { resize: none; }
+
+.caution { background: repeating-linear-gradient(45deg, var(--yellow) 0, var(--yellow) 5px, #1c1800 5px, #1c1800 11px); height: 3px; }
+.hex { clip-path: polygon(10% 0%,90% 0%,100% 50%,90% 100%,10% 100%,0% 50%); }
+.chamfer-br { clip-path: polygon(0 0, 100% 0, 100% calc(100% - 13px), calc(100% - 13px) 100%, 0 100%); }
+.chamfer-tr { clip-path: polygon(13px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 13px); }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes hexPulse { 0%,100%{opacity:.25} 50%{opacity:.9} }
+@keyframes declassify { 0%,35%{color:var(--red);letter-spacing:0.15em} 100%{color:var(--dim);letter-spacing:0.1em} }
+@keyframes stamp { 0%{transform:scale(1)} 40%{transform:scale(.96) translateY(1px)} 100%{transform:scale(1)} }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+
+.cursor::after { content:'█'; color:var(--orange); animation:blink 900ms step-end infinite; margin-left:2px; font-size:.85em; }
+.press:active { animation: stamp 120ms linear; }
+.fadein { animation: fadeIn 0.25s ease both; }
+
+input[type=range] { -webkit-appearance: none; width: 100%; height: 3px; background: var(--dim2); outline: none; cursor: pointer; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: var(--orange); clip-path: polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%); cursor: pointer; }
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255,106,0,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,106,0,0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  bg: '#0A0A0A', surf: '#141417', surf2: '#1e1e22', surf3: '#252529',
+  orange: '#FF6A00', yellow: '#F5D000', green: '#00FF7F', red: '#CC0000',
+  text: '#E8E5DC', dim: '#504D47', dim2: '#3a3835',
+  mono: "'IBM Plex Mono',monospace", head: "'Orbitron',sans-serif", serif: "'Crimson Pro',serif"
+};
+
+const BACKEND_URL = 'http://localhost:8000';
+const STORAGE_KEY = 'ask-you-state-v1';
+
+let idCtr = 100;
+const uid = () => `id${++idCtr}-${Date.now().toString(36)}`;
+const newConvId = () => `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+
+const formatTime = (ts) => {
+  const d = new Date(ts);
+  const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  return `${String(d.getDate()).padStart(2,'0')} ${months[d.getMonth()]}  ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+};
+
+const DEFAULT_SETTINGS = { temperature: 0.70, similarity: 0.30, mode: 'CLEAN', ego: 0.50 };
+
+const loadState = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+};
+const saveState = (state) => {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+};
+
+async function pingBackend() {
+  try {
+    const r = await fetch(`${BACKEND_URL}/health`, { method: 'GET' });
+    if (!r.ok) return { ok: false };
+    const data = await r.json();
+    return { ok: true, model: data.model };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function fetchConfig() {
+  try {
+    const r = await fetch(`${BACKEND_URL}/config`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+async function streamChat({ conversationId, message, mode, temperature, similarity, ego, onSources, onToken, onDone, onError }) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        message,
+        mode: mode.toLowerCase(),
+        temperature,
+        similarity_threshold: similarity,
+        ego,
+      }),
+    });
+    if (!res.ok) {
+      onError(`Server error ${res.status}`);
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.type === 'sources') onSources(evt.sources || []);
+          else if (evt.type === 'token') onToken(evt.text || '');
+          else if (evt.type === 'done') onDone();
+          else if (evt.type === 'error') onError(evt.message || 'Unknown error');
+        } catch (e) {
+          console.warn('Failed to parse SSE line', line);
+        }
+      }
+    }
+  } catch (e) {
+    onError(e.message || String(e));
+  }
+}
+
+async function resetBackendConversation(conversationId) {
+  try {
+    await fetch(`${BACKEND_URL}/conversations/${conversationId}/reset`, { method: 'POST' });
+  } catch {}
+}
+
+function egoLabel(ego) {
+  if (ego < 0.2) return 'SELF-WORTH CRITICALLY LOW';
+  if (ego < 0.4) return 'HEDGING, DOUBTING';
+  if (ego < 0.6) return 'NEUTRAL // AS-WRITTEN';
+  if (ego < 0.8) return 'CONVICTION, AUTHORITY';
+  return 'EMPEROR OF 100,000 ARMIES';
+}
+
+function egoColor(ego) {
+  if (ego < 0.2) return C.dim;
+  if (ego < 0.4) return C.yellow;
+  if (ego < 0.6) return C.green;
+  if (ego < 0.8) return C.orange;
+  return C.red;
+}
+
+function HexBtn({ children, onClick, color = C.orange, small, active, danger, full, style = {} }) {
+  const [hov, setHov] = useState(false);
+  const col = danger ? C.red : color;
+  return (
+    <button onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    className="hex press"
+    style={{
+      background: active ? col : 'transparent',
+      border: 'none', outline: `1px solid ${hov || active ? col : C.dim2}`,
+      color: active ? C.bg : hov ? col : C.dim,
+      fontFamily: C.mono, fontSize: small ? '9px' : '10px', fontWeight: '700',
+      letterSpacing: '0.1em', textTransform: 'uppercase',
+      padding: small ? '5px 16px' : '9px 26px',
+      cursor: 'pointer', transition: 'all 0.1s linear',
+      whiteSpace: 'nowrap', width: full ? '100%' : undefined,
+      ...style
+    }}>
+      {children}</button>);
+}
+
+function CautionDivider() { return <div className="caution" />; }
+
+function ScoreBadge({ score }) {
+  const pct = Math.round(score * 100);
+  const col = score > 0.85 ? C.green : score > 0.7 ? C.yellow : C.dim;
+  return (
+    <span className="hex" style={{
+      background: C.surf2, color: col, outline: `1px solid ${col}`,
+      fontFamily: C.mono, fontSize: '8px', fontWeight: '700',
+      padding: '2px 12px', letterSpacing: '0.05em', display: 'inline-block'
+    }}>{pct}%</span>);
+}
+
+function Label({ children, col = C.dim }) {
+  return <span style={{ fontFamily: C.head, fontSize: '8px', color: col, letterSpacing: '0.22em' }}>{children}</span>;
+}
+
+function SourcesAccordion({ sources, mode }) {
+  const [open, setOpen] = useState(mode === 'DEV');
+  const [flash, setFlash] = useState(false);
+  if (!sources?.length) return null;
+  const toggle = () => {
+    if (!open) { setFlash(true); setTimeout(() => setFlash(false), 900); }
+    setOpen((p) => !p);
+  };
+  return (
+    <div style={{ marginTop: '10px' }}>
+      <button onClick={toggle} style={{
+        background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
+        display: 'flex', alignItems: 'center', gap: '8px'
+      }}>
+        <span style={{ color: C.dim, fontSize: '10px' }}>{open ? '▲' : '▼'}</span>
+        <span style={{
+          fontFamily: C.mono, fontSize: '9px', letterSpacing: '0.1em',
+          animation: flash ? 'declassify 0.9s ease forwards' : 'none',
+          color: C.dim
+        }}>
+          {flash ? 'DECLASSIFIED' : `DECLASSIFY SOURCES [${sources.length}]`}
+        </span>
+      </button>
+      {open &&
+      <div className="fadein" style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {sources.map((s, i) =>
+        <div key={i} style={{ background: C.surf2, borderLeft: `2px solid ${C.dim2}`, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', gap: '8px' }}>
+                <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.yellow, letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.source_doc}</span>
+                <ScoreBadge score={s.similarity} />
+              </div>
+              <p style={{ fontFamily: C.mono, fontSize: '11px', color: C.dim, lineHeight: '1.55', fontStyle: 'italic' }}>"{s.content?.slice(0, 400)}{s.content?.length > 400 ? '...' : ''}"</p>
+            </div>
+        )}
+        </div>
+      }
+    </div>);
+}
+
+function QuickActions({ onAction, disabled }) {
+  return (
+    <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
+      {['GO DEEPER', 'GIVE EXAMPLE', 'SHORTER', 'COPY'].map((a) =>
+      <HexBtn key={a} small onClick={() => !disabled && onAction(a)} style={{ fontSize: '8px', padding: '4px 12px', opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}>{a}</HexBtn>
+      )}
+    </div>);
+}
+
+function UserMsg({ msg }) {
+  return (
+    <div className="fadein" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '28px' }}>
+      <div style={{ maxWidth: '62%' }}>
+        <div style={{ textAlign: 'right', marginBottom: '5px' }}>
+          <Label>OPERATOR INPUT</Label>
+        </div>
+        <div className="chamfer-tr" style={{ background: C.surf, overflow: 'hidden' }}>
+          <CautionDivider />
+          <div style={{ padding: '14px 18px' }}>
+            <p style={{ fontFamily: C.mono, fontSize: '13px', lineHeight: '1.7', color: C.text, whiteSpace: 'pre-wrap' }}>{msg.text}</p>
+          </div>
+        </div>
+      </div>
+    </div>);
+}
+
+function AiMsg({ msg, onAction, mode, globalStreaming, userName }) {
+  const paras = (msg.text || '').split('\n\n');
+  const bodyFont = C.mono;
+  const bodySize = '13px';
+  return (
+    <div className="fadein" style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '32px' }}>
+      <div style={{ maxWidth: '74%', width: '100%' }}>
+        <div style={{ marginBottom: '5px' }}>
+          <Label col={msg.error ? C.red : C.orange}>{msg.error ? 'MAGI // ERROR' : `MAGI // ${userName}`}</Label>
+        </div>
+        <div className="chamfer-br" style={{ background: C.surf, borderLeft: `3px solid ${msg.error ? C.red : C.orange}` }}>
+          <div style={{ padding: '18px 22px' }}>
+            {paras.map((p, i) =>
+              <p key={i} style={{
+                fontFamily: bodyFont, fontSize: bodySize, lineHeight: '1.8',
+                color: msg.error ? C.red : C.text, marginBottom: i < paras.length - 1 ? '14px' : 0,
+                whiteSpace: 'pre-wrap'
+              }} className={msg.streaming && i === paras.length - 1 ? 'cursor' : ''}>
+                {p || (msg.streaming ? '' : '')}
+              </p>
+            )}
+          </div>
+        </div>
+        {!msg.streaming && !msg.error && <>
+          <SourcesAccordion sources={msg.sources} mode={mode} />
+          <QuickActions onAction={(a) => onAction(msg.id, a)} disabled={globalStreaming} />
+        </>}
+      </div>
+    </div>);
+}
+
+function ThinkingMsg({ userName }) {
+  return (
+    <div className="fadein" style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '28px' }}>
+      <div>
+        <div style={{ marginBottom: '5px' }}><Label col={C.orange}>MAGI // {userName}</Label></div>
+        <div style={{ background: C.surf, borderLeft: `3px solid ${C.orange}`, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {[0, 1, 2].map((i) =>
+          <div key={i} className="hex" style={{
+            width: '10px', height: '10px', background: C.orange,
+            animation: `hexPulse 1.2s ${i * 0.35}s ease-in-out infinite`
+          }} />
+          )}
+          <span style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim, letterSpacing: '0.15em', marginLeft: '4px' }}>RETRIEVING FROM ARCHIVE</span>
+        </div>
+      </div>
+    </div>);
+}
+
+function Header({ settings, onSettings, backendStatus, chunkCount, userName }) {
+  const [hov, setHov] = useState(false);
+  const egoPct = Math.round((settings.ego ?? 0.5) * 100);
+  const egoCol = settings.ego > 0.8 ? C.red : settings.ego < 0.2 ? C.dim : null;
+  return (
+    <div style={{ background: C.bg, borderBottom: `1px solid ${C.dim2}`, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px', borderBottom: `1px solid ${C.dim2}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <svg width="40" height="36" viewBox="0 0 40 36" fill="none">
+            <polygon points="0,2 40,2 20,35" fill="none" stroke={C.orange} strokeWidth="1.5" />
+            <polygon points="8,2 32,2 20,26" fill={C.orange} opacity="0.15" />
+            <polygon points="14,2 26,2 20,14" fill={C.orange} opacity="0.5" />
+            <line x1="0" y1="2" x2="40" y2="2" stroke={C.orange} strokeWidth="1.5" />
+          </svg>
+          <div>
+            <div style={{ fontFamily: C.head, fontSize: '15px', fontWeight: '900', letterSpacing: '0.18em', color: C.text }}>ASK {userName}</div>
+            <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.22em', marginTop: '1px' }}>COGNITIVE ARCHIVE // MAGI INTERFACE v1.0</div>
+          </div>
+        </div>
+        <button onClick={onSettings} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+        className="hex press"
+        style={{ width: '38px', height: '34px', background: 'none', border: 'none', outline: `1px solid ${hov ? C.orange : C.dim2}`, cursor: 'pointer', color: hov ? C.orange : C.dim, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.1s linear' }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12" />
+          </svg>
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: '0', background: C.surf, overflowX: 'auto' }}>
+        {[
+          ['MODEL', backendStatus.model || 'OFFLINE', backendStatus.ok ? null : C.red],
+          ['TEMP', settings.temperature.toFixed(2), null],
+          ['THRESHOLD', settings.similarity.toFixed(2), null],
+          ['EGO', `${egoPct}%`, egoCol],
+          ['CHUNKS INDEXED', chunkCount.toLocaleString(), null],
+          ['MODE', settings.mode, settings.mode === 'DEV' ? C.red : C.green]
+        ].map(([lbl, val, col]) =>
+          <div key={lbl} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '7px 16px', borderRight: `1px solid ${C.dim2}`, whiteSpace: 'nowrap' }}>
+            <span style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.12em' }}>{lbl}</span>
+            <span style={{ fontFamily: C.mono, fontSize: '11px', fontWeight: '700', color: col || C.text, letterSpacing: '0.04em' }}>{val}</span>
+          </div>
+        )}
+      </div>
+    </div>);
+}
+
+function Sidebar({ convs, activeId, onSelect, onNew, onDelete }) {
+  const [search, setSearch] = useState('');
+  const filtered = convs.filter((c) => (c.first || 'new session').toLowerCase().includes(search.toLowerCase()));
+  return (
+    <div style={{ width: 264, minWidth: 264, background: C.surf, borderRight: `1px solid ${C.dim2}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', flexShrink: 0 }}>
+      <div style={{ padding: '10px', borderBottom: `1px solid ${C.dim2}` }}>
+        <div style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.2em', marginBottom: '6px' }}>SEARCH ARCHIVES</div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', background: C.surf2, padding: '6px 9px', border: `1px solid ${C.dim2}` }}>
+          <span style={{ color: C.dim, fontSize: '11px' }}>◈</span>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="QUERY..." style={{ flex: 1, fontSize: '11px' }} />
+        </div>
+      </div>
+      <div style={{ padding: '10px', borderBottom: `1px solid ${C.dim2}` }}>
+        <button onClick={onNew} className="press" style={{
+          width: '100%', background: 'none', border: `1px solid ${C.orange}`, color: C.orange,
+          fontFamily: C.mono, fontSize: '10px', fontWeight: '700', letterSpacing: '0.15em',
+          padding: '9px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+          transition: 'background 0.1s linear'
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,106,0,0.06)'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}>
+          <span style={{ fontSize: '14px', lineHeight: 1 }}>+</span> NEW CONVERSATION
+        </button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
+        {filtered.length === 0 && convs.length === 0 && (
+          <div style={{ padding: '20px 12px', textAlign: 'center' }}>
+            <div style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim2, letterSpacing: '0.1em', lineHeight: 1.6 }}>NO SESSIONS ON RECORD</div>
+          </div>
+        )}
+        {filtered.map((c) => <ConvCard key={c.id} conv={c} active={c.id === activeId} onClick={() => onSelect(c.id)} onDelete={() => onDelete(c.id)} />)}
+      </div>
+      <div style={{ padding: '10px', borderTop: `1px solid ${C.dim2}`, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ width: '6px', height: '6px', background: C.green, animation: 'hexPulse 2s ease infinite' }} />
+        <span style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim, letterSpacing: '0.1em' }}>MAGI SYSTEM ONLINE</span>
+      </div>
+    </div>);
+}
+
+function ConvCard({ conv, active, onClick, onDelete }) {
+  const [hov, setHov] = useState(false);
+  const handleDelete = (e) => {
+    e.stopPropagation();
+    if (confirm('Delete this conversation?')) onDelete();
+  };
+  return (
+    <div onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    style={{
+      padding: '10px 12px', marginBottom: '2px', cursor: 'pointer',
+      background: active ? C.surf2 : hov ? 'rgba(255,255,255,0.02)' : 'transparent',
+      borderLeft: `3px solid ${active ? C.orange : 'transparent'}`,
+      transition: 'all 0.1s linear', position: 'relative'
+    }}>
+      <div style={{ fontFamily: C.mono, fontSize: '10px', color: active ? C.text : C.dim, lineHeight: '1.45', marginBottom: '6px', paddingRight: hov ? '16px' : '0' }}>
+        {conv.first || 'New session'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <span style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim2 }}>{conv.time}</span>
+        <span style={{ fontFamily: C.mono, fontSize: '8px', color: C.dim2 }}>{conv.count} MSG</span>
+      </div>
+      {hov && (
+        <button onClick={handleDelete} style={{
+          position: 'absolute', top: '8px', right: '8px',
+          background: 'none', border: 'none', color: C.dim, fontSize: '11px',
+          cursor: 'pointer', padding: '2px 4px'
+        }}>✕</button>
+      )}
+    </div>);
+}
+
+function InputBar({ onSend, disabled, convId, msgCount, mode, backendOffline, ego }) {
+  const [val, setVal] = useState('');
+  const taRef = useRef();
+
+  const send = () => {
+    if (!val.trim() || disabled) return;
+    onSend(val.trim()); setVal('');
+    if (taRef.current) { taRef.current.style.height = 'auto'; }
+  };
+  const onKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+
+  const placeholder = backendOffline
+    ? 'BACKEND OFFLINE — START SERVER TO TRANSMIT'
+    : disabled
+      ? 'AWAITING RESPONSE...'
+      : 'TRANSMIT QUERY TO MAGI...';
+
+  const egoCol = egoColor(ego ?? 0.5);
+
+  return (
+    <div style={{ background: C.bg, borderTop: `1px solid ${C.dim2}`, padding: '14px 20px 10px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: '0', alignItems: 'stretch', background: C.surf, border: `1px solid ${backendOffline ? C.red : C.dim2}` }}>
+        <textarea ref={taRef} value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={onKey}
+        placeholder={placeholder}
+        style={{ flex: 1, padding: '13px 16px', fontFamily: C.mono, fontSize: '13px', lineHeight: '1.55', color: C.text, minHeight: '48px', maxHeight: '130px', overflowY: 'auto', background: 'transparent', border: 'none', outline: 'none', resize: 'none' }}
+        onInput={(e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 130) + 'px'; }} />
+        <button onClick={send} disabled={disabled || backendOffline}
+        style={{
+          width: '50px', flexShrink: 0, background: (disabled || backendOffline) ? C.dim2 : C.orange, border: 'none',
+          clipPath: 'polygon(0% 8%, 100% 50%, 0% 92%)',
+          cursor: (disabled || backendOffline) ? 'not-allowed' : 'pointer',
+          transition: 'background 0.1s linear'
+        }}
+        className="press" />
+      </div>
+      <div style={{ display: 'flex', gap: '20px', marginTop: '7px', flexWrap: 'wrap' }}>
+        {[
+          ['CONV', (convId || '').slice(0, 16).toUpperCase()],
+          ['MODE', mode, mode === 'DEV' ? C.red : C.green],
+          ['EGO', egoLabel(ego ?? 0.5), egoCol],
+          ['MSGS', String(msgCount)],
+          ['↵ SEND', '⇧↵ NEWLINE']
+        ].map(([l, v, col]) =>
+          <div key={l} style={{ display: 'flex', gap: '5px', alignItems: 'baseline' }}>
+            <span style={{ fontFamily: C.mono, fontSize: '7px', color: C.dim, letterSpacing: '0.12em' }}>{l}</span>
+            <span style={{ fontFamily: C.mono, fontSize: '9px', color: col || C.dim, fontWeight: '500' }}>{v}</span>
+          </div>
+        )}
+      </div>
+    </div>);
+}
+
+function SettingsPanel({ settings, onChange, visible, onClose }) {
+  const [temp, setTemp] = useState(settings.temperature);
+  const [sim, setSim] = useState(settings.similarity);
+  const [ego, setEgo] = useState(settings.ego ?? 0.5);
+  useEffect(() => setTemp(settings.temperature), [settings.temperature]);
+  useEffect(() => setSim(settings.similarity), [settings.similarity]);
+  useEffect(() => setEgo(settings.ego ?? 0.5), [settings.ego]);
+
+  const ZoneBar = ({ zones }) =>
+    <div style={{ position: 'relative', height: '16px', background: '#0c0c0c', marginBottom: '6px', overflow: 'hidden' }}>
+      {zones.map(({ left, width, label, col }, i) =>
+        <React.Fragment key={i}>
+          {i > 0 && <div style={{ position: 'absolute', left: `${left}%`, top: 0, bottom: 0, width: '1px', background: `rgba(245,208,0,0.4)` }} />}
+          <div style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 0, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontFamily: C.mono, fontSize: '7px', color: col, letterSpacing: '0.08em' }}>{label}</span>
+          </div>
+        </React.Fragment>
+      )}
+    </div>;
+
+  return (
+    <div style={{
+      position: 'absolute', top: 0, right: 0, bottom: 0, width: '340px',
+      background: C.surf, borderLeft: `1px solid ${C.dim2}`,
+      zIndex: 100, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      transform: visible ? 'translateX(0)' : 'translateX(100%)',
+      transition: 'transform 0.2s linear'
+    }} className="grid-bg">
+      <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.dim2}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Label>SYSTEM PARAMETERS</Label>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.dim, cursor: 'pointer', fontFamily: C.mono, fontSize: '14px' }}>✕</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '28px' }}>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <Label>TEMPERATURE</Label>
+            <span style={{ fontFamily: C.mono, fontSize: '20px', fontWeight: '700', color: C.orange, lineHeight: 1 }}>{temp.toFixed(2)}</span>
+          </div>
+          <ZoneBar zones={[
+            { left: 0, width: 20, label: 'COLD', col: C.dim },
+            { left: 20, width: 30, label: 'OPTIMAL', col: C.green },
+            { left: 50, width: 50, label: 'CHAOTIC', col: C.red }
+          ]} />
+          <input type="range" min="0" max="2" step="0.01" value={temp}
+          onChange={(e) => { const v = parseFloat(e.target.value); setTemp(v); onChange('temperature', v); }} />
+        </div>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <Label>SIMILARITY THRESHOLD</Label>
+            <span style={{ fontFamily: C.mono, fontSize: '20px', fontWeight: '700', color: C.orange, lineHeight: 1 }}>{sim.toFixed(2)}</span>
+          </div>
+          <ZoneBar zones={[
+            { left: 0, width: 25, label: 'TOO LOOSE', col: C.yellow },
+            { left: 25, width: 25, label: 'OPTIMAL', col: C.green },
+            { left: 50, width: 50, label: 'TOO STRICT', col: C.dim }
+          ]} />
+          <input type="range" min="0" max="1" step="0.01" value={sim}
+          onChange={(e) => { const v = parseFloat(e.target.value); setSim(v); onChange('similarity', v); }} />
+        </div>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <Label>EGO CALIBRATION</Label>
+            <span style={{ fontFamily: C.mono, fontSize: '20px', fontWeight: '700', color: egoColor(ego), lineHeight: 1 }}>{Math.round(ego * 100)}%</span>
+          </div>
+          <ZoneBar zones={[
+            { left: 0, width: 20, label: 'INADEQUATE', col: C.dim },
+            { left: 20, width: 20, label: 'DOUBTING', col: C.yellow },
+            { left: 40, width: 20, label: 'BASELINE', col: C.green },
+            { left: 60, width: 20, label: 'COMMANDING', col: C.orange },
+            { left: 80, width: 20, label: 'EMPEROR', col: C.red }
+          ]} />
+          <input type="range" min="0" max="1" step="0.01" value={ego}
+          onChange={(e) => { const v = parseFloat(e.target.value); setEgo(v); onChange('ego', v); }} />
+          <div style={{ fontFamily: C.mono, fontSize: '8px', color: egoColor(ego), letterSpacing: '0.08em', marginTop: '10px', lineHeight: 1.6, textAlign: 'center' }}>
+            {egoLabel(ego)}
+          </div>
+        </div>
+        <div>
+          <div style={{ marginBottom: '12px' }}><Label>OPERATING MODE</Label></div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            {['CLEAN', 'DEV'].map((m) => {
+              const active = settings.mode === m;
+              const col = m === 'DEV' ? C.red : C.orange;
+              return (
+                <button key={m} onClick={() => onChange('mode', m)} className="hex press" style={{
+                  flex: 1, background: active ? col : 'transparent', border: 'none',
+                  outline: `1px solid ${active ? col : C.dim2}`,
+                  color: active ? C.bg : C.dim, fontFamily: C.mono, fontSize: '11px', fontWeight: '700',
+                  letterSpacing: '0.12em', padding: '11px 20px', cursor: 'pointer', transition: 'all 0.15s linear'
+                }}>{m}</button>);
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+            {['Natural responses, sources collapsed', 'Full citations, grounding tiers visible'].map((t, i) =>
+              <div key={i} style={{ flex: 1, textAlign: 'center', fontFamily: C.mono, fontSize: '8px', color: C.dim, lineHeight: '1.5' }}>{t}</div>
+            )}
+          </div>
+        </div>
+        <CautionDivider />
+        <button onClick={() => onChange('reset')} className="press" style={{
+          width: '100%', background: 'none', border: `1px solid ${C.yellow}`, color: C.yellow,
+          fontFamily: C.mono, fontSize: '10px', fontWeight: '700', letterSpacing: '0.15em', padding: '10px', cursor: 'pointer',
+          transition: 'background 0.1s linear'
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(245,208,0,0.05)'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}>
+          RESET TO DEFAULTS</button>
+      </div>
+    </div>);
+}
+
+function EmptyState({ backendOffline, userName }) {
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px', opacity: backendOffline ? 0.4 : 0.6 }}>
+      <svg width="72" height="64" viewBox="0 0 72 64" fill="none">
+        <polygon points="2,2 70,2 36,62" fill="none" stroke={backendOffline ? C.red : C.orange} strokeWidth="1" />
+        <polygon points="14,2 58,2 36,44" fill={backendOffline ? C.red : C.orange} opacity="0.08" />
+        <polygon points="24,2 48,2 36,24" fill={backendOffline ? C.red : C.orange} opacity="0.25" />
+        <line x1="2" y1="2" x2="70" y2="2" stroke={backendOffline ? C.red : C.orange} strokeWidth="1.5" />
+      </svg>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontFamily: C.head, fontSize: '11px', color: backendOffline ? C.red : C.dim, letterSpacing: '0.3em', marginBottom: '8px' }}>
+          {backendOffline ? 'MAGI INTERFACE OFFLINE' : `MAGI INTERFACE READY // ASK ${userName}`}
+        </div>
+        <div style={{ fontFamily: C.mono, fontSize: '9px', color: C.dim2, letterSpacing: '0.15em', maxWidth: '380px', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+          {backendOffline
+            ? 'START THE BACKEND SERVER TO ENGAGE\n\nuvicorn server:app --reload --port 8000'
+            : 'TRANSMIT QUERY TO BEGIN SESSION'}
+        </div>
+      </div>
+    </div>);
+}
+
+function App() {
+  const persisted = loadState();
+
+  const [convs, setConvs] = useState(persisted?.convs || []);
+  const [activeId, setActiveId] = useState(persisted?.activeId || null);
+  const [msgs, setMsgs] = useState(persisted?.msgs || {});
+  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, ...(persisted?.settings || {}) });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [thinking, setThinking] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [backendStatus, setBackendStatus] = useState({ ok: false, model: 'CHECKING...' });
+  const [chunkCount, setChunkCount] = useState(persisted?.chunkCount || 0);
+  const [userName, setUserName] = useState(persisted?.userName || 'YOU');
+  const chatRef = useRef();
+
+  const activeMsgs = activeId ? (msgs[activeId] || []) : [];
+  const globalStreaming = thinking || streaming;
+
+  useEffect(() => {
+    saveState({ convs, activeId, msgs, settings, chunkCount, userName });
+  }, [convs, activeId, msgs, settings, chunkCount, userName]);
+
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [activeMsgs, thinking]);
+
+  useEffect(() => {
+    const check = async () => {
+      const r = await pingBackend();
+      setBackendStatus(r);
+    };
+    const loadConfig = async () => {
+      const cfg = await fetchConfig();
+      if (cfg?.name) setUserName(String(cfg.name).toUpperCase());
+    };
+    check();
+    loadConfig();
+    const iv = setInterval(check, 15000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const handleSend = async (text) => {
+    let currentId = activeId;
+    if (!currentId) {
+      currentId = newConvId();
+      const newConv = { id: currentId, first: text.slice(0, 60), time: formatTime(Date.now()), count: 0 };
+      setConvs((p) => [newConv, ...p]);
+      setActiveId(currentId);
+    }
+
+    const userMsg = { id: uid(), role: 'user', text };
+    setMsgs((p) => ({ ...p, [currentId]: [...(p[currentId] || []), userMsg] }));
+    setConvs((p) => p.map((c) => {
+      if (c.id !== currentId) return c;
+      return {
+        ...c,
+        count: c.count + 1,
+        first: c.count === 0 ? text.slice(0, 60) : c.first,
+        time: formatTime(Date.now())
+      };
+    }));
+
+    setThinking(true);
+
+    const aiId = uid();
+    let gotFirstToken = false;
+    let accumulatedText = '';
+    let receivedSources = [];
+
+    await streamChat({
+      conversationId: currentId,
+      message: text,
+      mode: settings.mode,
+      temperature: settings.temperature,
+      similarity: settings.similarity,
+      ego: settings.ego ?? 0.5,
+      onSources: (sources) => {
+        receivedSources = sources;
+      },
+      onToken: (tok) => {
+        if (!gotFirstToken) {
+          gotFirstToken = true;
+          setThinking(false);
+          setStreaming(true);
+          const aiMsg = { id: aiId, role: 'ai', text: '', streaming: true, sources: receivedSources };
+          setMsgs((p) => ({ ...p, [currentId]: [...(p[currentId] || []), aiMsg] }));
+        }
+        accumulatedText += tok;
+        setMsgs((p) => {
+          const list = [...(p[currentId] || [])];
+          const li = list.findIndex((m) => m.id === aiId);
+          if (li >= 0) list[li] = { ...list[li], text: accumulatedText };
+          return { ...p, [currentId]: list };
+        });
+      },
+      onDone: () => {
+        setStreaming(false);
+        setThinking(false);
+        setMsgs((p) => {
+          const list = [...(p[currentId] || [])];
+          const li = list.findIndex((m) => m.id === aiId);
+          if (li >= 0) list[li] = { ...list[li], streaming: false, sources: receivedSources };
+          return { ...p, [currentId]: list };
+        });
+        setConvs((p) => p.map((c) => c.id === currentId ? { ...c, count: c.count + 1 } : c));
+      },
+      onError: (err) => {
+        setThinking(false);
+        setStreaming(false);
+        const errorMsg = { id: uid(), role: 'ai', text: `TRANSMISSION FAILED: ${err}\n\nCheck that the backend is running at ${BACKEND_URL}`, error: true, streaming: false, sources: [] };
+        setMsgs((p) => {
+          const list = [...(p[currentId] || [])];
+          const filtered = list.filter((m) => m.id !== aiId);
+          return { ...p, [currentId]: [...filtered, errorMsg] };
+        });
+      },
+    });
+  };
+
+  const handleNew = () => {
+    const id = newConvId();
+    setConvs((p) => [{ id, first: 'New session', time: formatTime(Date.now()), count: 0 }, ...p]);
+    setMsgs((p) => ({ ...p, [id]: [] }));
+    setActiveId(id);
+  };
+
+  const handleSelect = (id) => {
+    setActiveId(id);
+  };
+
+  const handleDelete = (id) => {
+    setConvs((p) => p.filter((c) => c.id !== id));
+    setMsgs((p) => {
+      const newMsgs = { ...p };
+      delete newMsgs[id];
+      return newMsgs;
+    });
+    resetBackendConversation(id);
+    if (activeId === id) {
+      setActiveId(null);
+    }
+  };
+
+  const handleAction = (msgId, action) => {
+    if (action === 'COPY') {
+      const m = activeMsgs.find((m) => m.id === msgId);
+      if (m) navigator.clipboard?.writeText(m.text).catch(() => {});
+      return;
+    }
+    const map = {
+      'GO DEEPER': 'Go deeper on that last point.',
+      'GIVE EXAMPLE': 'Give a concrete example.',
+      'SHORTER': 'Give a shorter summary of the same answer.'
+    };
+    if (map[action]) handleSend(map[action]);
+  };
+
+  const handleSettings = (k, v) => {
+    if (k === 'reset') {
+      setSettings({ ...DEFAULT_SETTINGS });
+    } else {
+      setSettings((p) => ({ ...p, [k]: v }));
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: C.bg, position: 'relative' }}>
+      <Header
+        settings={settings}
+        onSettings={() => setSettingsOpen((p) => !p)}
+        backendStatus={backendStatus}
+        chunkCount={chunkCount}
+        userName={userName}
+      />
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <Sidebar
+          convs={convs}
+          activeId={activeId}
+          onSelect={handleSelect}
+          onNew={handleNew}
+          onDelete={handleDelete}
+        />
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          <div ref={chatRef} style={{
+            flex: 1, overflowY: 'auto', padding: '36px 56px 24px 72px',
+            background: 'linear-gradient(to bottom, #1d0500 0%, #100904 18%, #0A0A0A 46%, #080809 75%, #05050a 100%)'
+          }}>
+            {(!activeId || activeMsgs.length === 0) && !thinking ?
+              <EmptyState backendOffline={!backendStatus.ok} userName={userName} /> :
+              <>
+                {activeMsgs.map((m) =>
+                  m.role === 'user' ?
+                    <UserMsg key={m.id} msg={m} /> :
+                    <AiMsg key={m.id} msg={m} onAction={handleAction} mode={settings.mode} globalStreaming={globalStreaming} userName={userName} />
+                )}
+                {thinking && <ThinkingMsg userName={userName} />}
+              </>
+            }
+          </div>
+
+          <InputBar
+            onSend={handleSend}
+            disabled={globalStreaming}
+            convId={activeId || ''}
+            msgCount={activeMsgs.length}
+            mode={settings.mode}
+            backendOffline={!backendStatus.ok}
+            ego={settings.ego}
+          />
+        </div>
+
+        <SettingsPanel settings={settings} onChange={handleSettings} visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </div>
+    </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
